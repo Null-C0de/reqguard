@@ -1,0 +1,8 @@
+# ReqGuard 运行依赖
+#
+# 只有「复现漏报率评估」时才需要安装。
+# SKILL.md 本身是提示词文件，日常用它检查自己的项目不需要任何依赖。
+#
+#   pip install -r requirements.txt
+
+PyYAML>=6.0

@@ -1,0 +1,274 @@
+# =============================================================================
+# ReqGuard 评估用 ground-truth（预期判定）
+# -----------------------------------------------------------------------------
+# ！本文件为草案，需人工确认后作为评估基准；仅用于评估 skill，不用于日常使用。
+# ！禁止由 AI 自行确认 ground-truth。
+# ！建议人工确认后隔天复核，或由他人独立标注部分样本做对照。
+#
+# 用途：只有「评估 ReqGuard 本身的漏报率」才需要本文件。
+#       日常用自己的需求文档 + 自己的代码检查时，不需要写 ground-truth。
+#
+# 当前状态：DRAFT — 未经人工确认，不得作为对外数字的评分依据。
+# 规模说明：10 条为起步规模，统计意义有限；正式评估建议扩展到 20～30 条。
+#           对外引用数字必须来自 ≥20 条测试集。
+# 已知覆盖缺口：本版是「9 条埋坑 MUST + 1 条合规 MAY」的结构，
+#           缺少「合规的 MUST 对照样本」，因此误报率在 MUST 维度上无法被有效度量。
+#           扩展评估集时必须补齐合规 MUST 样本（见 references/eval-protocol.md）。
+# =============================================================================
+
+version: 1
+schema: "reqguard.ground-truth"
+status: "draft"                      # draft | human-confirmed
+requires_human_confirmation: true
+confirmed_by: null                   # 人工确认后填写姓名与日期，AI 不得填写
+confirmed_at: null
+dataset_size: 10
+created: "2026-11-10"
+
+# 判定取值域：符合 / 不符合 / 无法判定
+verdict_domain: ["符合", "不符合", "无法判定"]
+
+# 本版统计口径
+composition:
+  MUST: 9
+  SHOULD: 0
+  MAY: 1
+  expected_不符合: 9
+  expected_符合: 1
+  expected_无法判定: 0
+  hidden_traps: 9                    # “本地能跑但不合规”的隐性坑
+
+# 自动评分时的匹配约定（run_eval.py 使用）
+matching_convention:
+  code_location_primary: "函数名 + 代码片段"
+  line_number: "仅作辅助，不参与必中判定"
+  hit_rule: "函数名命中 且 片段关键 token 命中 ≥1 即视为定位成功"
+  verdict_normalization: "去空格与标点后完全匹配；‘基本符合/部分符合’记为不符合匹配失败"
+
+# 合规片段（用于避免误判：这些代码看起来沾边，但本身不构成违规）
+# run_eval.py 不读取本节，仅供人工复核参考。
+compliant_fragments:
+  - file: "testset/code/crypto.ts"
+    symbol: "sha256()"
+    why: "文件完整性/缓存键用途的内容摘要，不用于密码；不得作为 R-03 的违规证据。"
+  - file: "testset/code/payment.ts"
+    symbol: "verifyWebhookSignature()"
+    why: "实现正确（HMAC-SHA256 + timingSafeEqual），但无调用点；作为 R-05 的『定义 ≠ 生效』对照，不得据此判符合。"
+  - file: "testset/code/auth.ts"
+    symbol: "requireAuth / signToken / verifyToken"
+    why: "鉴权实现正确，但订单路由未引用；作为 R-02 的对照证据，不得据此判符合。"
+  - file: "testset/code/ui.ts"
+    symbol: "t() / renderOrderStatus()"
+    why: "R-10 的真实合规实现，判『符合』是正确的，不应计入误报。"
+
+# -----------------------------------------------------------------------------
+# 样本
+# -----------------------------------------------------------------------------
+samples:
+
+  - id: "R-01"
+    priority: "MUST"
+    risk: "high"
+    risk_rule: "high.secret_management"
+    expected: "不符合"
+    requirement: "所有密钥类配置必须从环境变量或配置中心读取，不得以字面量形式出现在源码与版本库中。"
+    reason: >-
+      auth.ts 在模块顶层把 JWT 签名密钥写成字面量常量，没有任何 env 读取路径。
+      本地运行时鉴权链路完全正常（签发/校验都能跑通），因此极易被“跑通了就算覆盖”误判为符合。
+    code_location:
+      file: "testset/code/auth.ts"
+      function: "const JWT_SECRET"
+      snippet: "JWT_SECRET = \"dev-secret-123456\""
+      match_tokens: ["JWT_SECRET", "dev-secret-123456"]
+      line_hint: "模块顶层常量声明处（辅助）"
+    trap_type: "硬编码密钥"
+    note: "若代码同时存在 process.env 读取但带写死兜底值，仍判不符合。"
+
+  - id: "R-02"
+    priority: "MUST"
+    risk: "high"
+    risk_rule: "high.authentication"
+    expected: "不符合"
+    requirement: "除登录与健康检查外的所有业务接口必须在服务端校验访问 token，不得仅依赖前端拦截。"
+    reason: >-
+      order.ts 的订单接口在路由上只挂了日志中间件，没有任何 token 校验；auth.ts 里确实写了实现正确的
+      requireAuth 中间件，但订单路由从未引用它。接口在本地能正常返回数据，属于“确认缺失”型不符合——
+      需要写明已检查 order.ts 的 registerOrderRoutes() 全部四条路由。
+    code_location:
+      file: "testset/code/order.ts"
+      function: "registerOrderRoutes()"
+      snippet: "router.post(\"/orders\", logRequest, createOrderHandler)"
+      match_tokens: ["registerOrderRoutes", "logRequest", "createOrderHandler"]
+      line_hint: "路由注册行（辅助）"
+    trap_type: "业务接口无 token 校验"
+    note: "对照证据：auth.ts 中存在 requireAuth 中间件定义，但未被任何路由引用（定义 ≠ 生效）。"
+
+  - id: "R-03"
+    priority: "MUST"
+    risk: "high"
+    risk_rule: "high.cryptography"
+    expected: "不符合"
+    requirement: "用户密码必须使用 bcrypt、argon2 或 scrypt 等带盐的慢哈希存储，禁止使用 MD5、SHA1 直接哈希。"
+    reason: >-
+      crypto.ts 的 hashPassword 直接使用 crypto.createHash("md5")，无盐、无迭代、无慢哈希。
+      登录流程可以跑通（注册与登录都用同一函数），运行时不会报错。
+    code_location:
+      file: "testset/code/crypto.ts"
+      function: "hashPassword()"
+      snippet: "crypto.createHash(\"md5\").update(password).digest(\"hex\")"
+      match_tokens: ["hashPassword", "createHash", "md5"]
+      line_hint: "哈希计算表达式（辅助）"
+    trap_type: "MD5 存密码"
+    note: "文件中另有 sha256 摘要工具函数用于非密码场景，属合规用法，不构成此项的证据。"
+
+  - id: "R-04"
+    priority: "MUST"
+    risk: "high"
+    risk_rule: "high.payment"
+    expected: "不符合"
+    requirement: "支付下单必须调用真实支付网关；mock 实现只允许在测试环境且通过显式开关启用，默认关闭。"
+    reason: >-
+      payment.ts 的 createPayment 直接返回 { mock: true } 的成功结果，未引入任何网关 SDK，也没有环境开关判断。
+      接口能返回“支付成功”，本地联调完全正常，是典型的“本地能跑但不合规”。
+    code_location:
+      file: "testset/code/payment.ts"
+      function: "createPayment()"
+      snippet: "success: true, mock: true, tradeNo: `MOCK-${Date.now()}`"
+      match_tokens: ["createPayment", "mock: true", "MOCK-"]
+      line_hint: "返回语句（辅助）"
+    trap_type: "支付返回 mock 且未接真实网关"
+    note: "必须同时打「疑似本地实现，需人工确认」标记。"
+
+  - id: "R-05"
+    priority: "MUST"
+    risk: "high"
+    risk_rule: "high.payment"
+    expected: "不符合"
+    requirement: "支付回调必须校验网关签名，且同一笔回调重复到达时只入账一次（幂等）。"
+    reason: >-
+      payment.ts 的 handlePaymentCallback 直接按订单号更新为已支付，既不验签也不做幂等。
+      文件里确实存在 verifyWebhookSignature() 的正确实现，但回调处理函数从未调用它——
+      这是本测试集区分“函数存在”与“真正生效”的关键样本，只看符号名会误判为符合。
+    code_location:
+      file: "testset/code/payment.ts"
+      function: "handlePaymentCallback()"
+      snippet: "const order = await findOrder(payload.out_trade_no); await markOrderPaid(order.id)"   # 代码中为相邻两行"
+      match_tokens: ["handlePaymentCallback", "markOrderPaid", "out_trade_no"]
+      line_hint: "回调处理函数体（辅助）"
+    trap_type: "回调不校验签名 / 无幂等"
+    note: "对照证据：verifyWebhookSignature() 定义存在且实现正确，但无调用点（E2 证据，不足以判符合）。"
+
+  - id: "R-06"
+    priority: "MUST"
+    risk: "high"
+    risk_rule: "high.authorization"
+    expected: "不符合"
+    requirement: "系统必须支持 admin、staff、nurse、approver 四种角色，且每种角色的可执行操作在服务端有对应的权限判断。"
+    reason: >-
+      permission.ts 的角色枚举只有 ADMIN 与 STAFF，缺失 NURSE 与 APPROVER；
+      canApprove() 用 staff 兜底放行审批动作，等于把审批权下放给了普通员工。
+      系统能正常登录与操作，功能演示不受影响。
+    code_location:
+      file: "testset/code/permission.ts"
+      function: "Role 枚举 / canApprove()"
+      snippet: "return actor.role === Role.STAFF || actor.role === Role.ADMIN"
+      match_tokens: ["Role", "ADMIN", "STAFF", "canApprove"]
+      line_hint: "角色枚举与审批判断（辅助）"
+    trap_type: "权限只区分 admin/staff，缺 nurse/approver"
+    note: "两处缺失（枚举缺项 + 兜底放行）应被视为同一需求下的两条判据，均不通过。"
+
+  - id: "R-07"
+    priority: "MUST"
+    risk: "mid"
+    risk_rule: "mid.state_machine"
+    expected: "不符合"
+    requirement: "订单状态必须覆盖 PENDING、APPROVED、REJECTED、WITHDRAWN、EXPIRED 五种，并实现对应用状态迁移校验。"
+    reason: >-
+      order.ts 的状态枚举与迁移表只有 PENDING、APPROVED、REJECTED 三种，
+      缺失 WITHDRAWN 与 EXPIRED，且 transferOrderStatus 未拒绝非法迁移（任意状态可跳到任意状态）。
+      主流程（下单→审批→完成）在本地完全跑通，缺的两个状态只在撤回/超时场景暴露。
+    code_location:
+      file: "testset/code/order.ts"
+      function: "OrderStatus / transferOrderStatus()"
+      snippet: "PENDING = \"PENDING\", APPROVED = \"APPROVED\", REJECTED = \"REJECTED\""
+      match_tokens: ["OrderStatus", "PENDING", "APPROVED", "REJECTED", "transferOrderStatus"]
+      line_hint: "状态枚举定义处（辅助）"
+    trap_type: "订单状态缺 WITHDRAWN / EXPIRED 分支"
+    note: "缺失状态名在代码中检索不到，属于“确认缺失”，需写明检索范围。"
+
+  - id: "R-08"
+    priority: "MUST"
+    risk: "mid"
+    risk_rule: "mid.idempotency"
+    expected: "不符合"
+    requirement: "订单提交接口必须做幂等控制，同一用户重复提交同一业务标识时只能生成一笔订单。"
+    reason: >-
+      order.ts 的 createOrderHandler 直接写入新订单，没有幂等键、没有唯一约束、没有去重表，
+      连注释里都没有提到防重。双击提交会产生两笔订单，而单次调用测试永远发现不了。
+    code_location:
+      file: "testset/code/order.ts"
+      function: "createOrderHandler()"
+      snippet: "const order = await orderRepo.insert({ userId, items, status: OrderStatus.PENDING })"
+      match_tokens: ["createOrderHandler", "orderRepo.insert", "PENDING"]
+      line_hint: "写库语句（辅助）"
+    trap_type: "重复提交无幂等"
+    note: "若只在前端按钮做防抖，仍判不符合（服务端无控制）。"
+
+  - id: "R-09"
+    priority: "MUST"
+    risk: "high"
+    risk_rule: "high.audit"
+    expected: "不符合"
+    requirement: "登录（成功与失败）、支付发起与回调、审批通过与驳回六类事件必须写入审计表，记录操作人、操作对象与结果。"
+    reason: >-
+      各模块只有 console.log 打印，没有任何审计写入；auth.ts 的登录函数、payment.ts 的支付函数、
+      order.ts 的审批函数均无审计调用。功能与日志打印正常，容易被认为“有日志就算审计”。
+    code_location:
+      file: "testset/code/auth.ts"
+      function: "login()"
+      snippet: "console.log(\"[login]\", username)"
+      match_tokens: ["login", "console.log"]
+      line_hint: "登录函数体（辅助）"
+    trap_type: "登录/支付/审批无审计日志"
+    note: >-
+      同一需求的证据分布在 auth.ts / payment.ts / order.ts 三处；
+      只查其中一处不足以判符合，也不足以判“确认缺失”，需检查全部三个入口。
+
+  - id: "R-10"
+    priority: "MAY"
+    risk: "low"
+    risk_rule: "low.ui_copy"
+    expected: "符合"
+    requirement: "界面文案应支持国际化，不得将展示文案硬编码在组件中。"
+    reason: >-
+      ui.ts 的文案统一通过 t("order.status.pending") 之类的 key 取用，并提供了 zh-CN 词条表，
+      组件内没有硬编码展示文本。这是本测试集中的**合规对照样本**，用于观察检查器是否会把合规项误判为不符合（误报）。
+    code_location:
+      file: "testset/code/ui.ts"
+      function: "renderOrderStatus() / messages(zh-CN)"
+      snippet: "t(\"order.status.pending\")"
+      match_tokens: ["renderOrderStatus", "t(", "order.status.pending"]
+      line_hint: "文案取用处（辅助）"
+    trap_type: "无（合规对照）"
+    note: "MAY 级，不计入未通过；但若被误判为不符合，应计入误报率。"
+
+# -----------------------------------------------------------------------------
+# 人工确认清单（确认前请逐项打勾）
+# -----------------------------------------------------------------------------
+human_review_checklist:
+  - "9 条 expected=不符合 是否与埋坑意图一致"
+  - "R-10 的 expected=符合 是否成立（是否真的没有硬编码文案）"
+  - "是否存在「预期不符合但其实实现合规」的误标"
+  - "code_location 的函数名与片段是否与最终 testset 代码一致"
+  - "风险等级是否符合 risk-rules.yaml 的自动分级结果"
+  - "是否补齐了合规的 MUST 对照样本（本版缺失，扩展时必须补）"
+  - "确认人是否与标注人为不同的人，或已隔天复核"
+
+# -----------------------------------------------------------------------------
+# 禁止事项（写在这里是为了让贡献者一眼看到）
+# -----------------------------------------------------------------------------
+prohibited:
+  - "禁止 AI 自行把 status 改成 human-confirmed"
+  - "禁止为了让漏报率好看而修改 expected"
+  - "禁止在没有实际运行评估的情况下写入任何评估结果数字"
+  - "禁止把本文件的样本当作日常检查用例"

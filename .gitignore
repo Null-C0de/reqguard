@@ -1,0 +1,43 @@
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node（本仓库没有发布物，node_modules 只在本地临时跑 tsc 时出现）-----
+node_modules/
+package-lock.json
+.pnpm-store/
+
+# --- 评估临时输出（A/B 报告与 score.md 属于每次运行的产物，不入库）------
+eval_output/
+score.json
+
+# --- 本地覆盖的规则文件（个人配置，不进版本库）--------------------------
+*local.yaml
+risk-rules.local.yaml
+
+# --- 环境变量与密钥 -------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- 编辑器 / IDE ---------------------------------------------------------
+.vscode/
+.idea/
+*.iml
+*.swp
+*.swo
+
+# --- 系统文件 -------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,519 @@
+# =============================================================================
+# ReqGuard 风险分级规则
+# -----------------------------------------------------------------------------
+# 作用：把「需求条款」自动归入 高 / 中 / 低 三档，并规定每档的取证与阻断要求。
+# 用法：SKILL.md 第 3 节步骤 2 读取本文件；用户可传入覆盖版规则文件替代默认规则。
+# 原则：规则命中不了就归入 unclassified（待人工定级），禁止模型凭感觉硬猜等级。
+# =============================================================================
+
+version: 1
+schema: reqguard.risk-rules
+updated: "2026-11-10"
+
+meta:
+  purpose: "自动风险分级 + 取证强度要求 + 报告排序，三者由同一份规则驱动，避免分级与取证脱节。"
+  design_note: >-
+    分级不看代码质量、不看改动规模，只看「这条需求一旦被假性满足，后果有多严重」。
+    鉴权、密钥、权限、加密、支付、审计、数据隔离一旦漏判，后果是不可逆的（越权、泄露、资损），
+    因此这些类别一律为高风险，并要求强制证据定位。
+  override_hint: >-
+    复制本文件为 risk-rules.local.yaml，按需修改 keywords / clause_types / grades，
+    调用时把该文件作为「风险规则」传入即可，无需改动 SKILL.md。
+  confidence_note: "关键词匹配是召回优先的粗筛：宁可多命中（升级风险），不可漏命中（降级风险）。"
+
+settings:
+  # 命中不了任何规则的条款归入此桶，不硬猜等级
+  unclassified_bucket: "待人工定级"
+  # 多条规则同时命中时的取值策略
+  risk_precedence: ["high", "mid", "low"]
+  # 匹配对象：需求原文优先；标题用于补召回
+  match_targets: ["requirement_text", "requirement_title", "acceptance_criteria"]
+  case_sensitive: false
+  # 关键词是否参与英文子串匹配（如 auth 命中 authorization）
+  substring_match: true
+  # 单条需求命中多个 clause_type 时是否保留全部（报告需列出全部命中项）
+  keep_all_matched_types: true
+
+# -----------------------------------------------------------------------------
+# 风险分级
+# -----------------------------------------------------------------------------
+grades:
+
+  # =========================== 高风险 ===========================
+  high:
+    label: "高风险"
+    rationale: "漏判后果不可逆：越权访问、密钥泄露、资金损失、审计缺失导致无法追溯、跨租户数据串号。"
+    evidence_policy:
+      min_evidence_level: "E1"
+      require_three_tuple: true          # 文件 :: 函数 :: 片段
+      forbid_bare_covered: true          # 禁止只写「已覆盖」
+      require_enforcement_check: true    # 必须追调用链，确认是否真正生效
+      block_release_if_unverifiable: true # 判「无法判定」即视为阻塞项
+    report_policy:
+      top_of_report: true
+      must_appear_in_detail_table: true
+    clause_types:
+
+      - id: "high.authentication"
+        label: "鉴权"
+        rationale: "业务接口若只在前端或网关侧做校验，后端可被直接调用。"
+        keywords:
+          - "鉴权"
+          - "认证"
+          - "登录态"
+          - "令牌"
+          - "校验 token"
+          - "token"
+          - "jwt"
+          - "session"
+          - "middleware"
+          - "中间件"
+          - "guard"
+          - "requireAuth"
+          - "passport"
+          - "oauth"
+          - "sso"
+          - "单点登录"
+          - "接口认证"
+        violation_signals:
+          - "路由已注册但未挂载认证中间件"
+          - "认证逻辑仅存在于前端请求拦截器"
+          - "鉴权函数定义后从未被调用"
+          - "getUserFromHeader() 未校验签名即返回用户"
+
+      - id: "high.secret_management"
+        label: "密钥与凭证"
+        rationale: "密钥进入源码或仓库即视为已泄露，轮换成本高。"
+        keywords:
+          - "密钥"
+          - "秘钥"
+          - "secret"
+          - "apikey"
+          - "api_key"
+          - "access_key"
+          - "凭证"
+          - "环境变量"
+          - "配置中心"
+          - "kms"
+          - "vault"
+          - "dotenv"
+          - "hardcode"
+          - "硬编码"
+          - "私钥"
+          - "证书"
+          - "口令"
+        violation_signals:
+          - "常量直接赋值为字面量密钥"
+          - "从 env 读取但提供写死的兜底默认值"
+          - "密钥出现在测试文件或示例配置中且与生产一致"
+          - "密钥被提交进版本库的历史文件"
+
+      - id: "high.authorization"
+        label: "权限与角色"
+        rationale: "角色矩阵缺项会直接导致越权：缺失角色要么无权限可用，要么被并到高权角色。"
+        keywords:
+          - "权限"
+          - "越权"
+          - "角色"
+          - "role"
+          - "rbac"
+          - "permission"
+          - "acl"
+          - "admin"
+          - "staff"
+          - "nurse"
+          - "approver"
+          - "审批人"
+          - "数据权限"
+          - "操作权限"
+        violation_signals:
+          - "角色枚举少于需求规定的角色集合"
+          - "权限判断用 if (role === 'admin') 兜底放行其他角色"
+          - "权限校验只在前端菜单层做"
+          - "权限矩阵写在文档里但代码中没有对应判断"
+
+      - id: "high.cryptography"
+        label: "加密与口令存储"
+        rationale: "弱哈希不可逆地损坏凭证安全；错误用法（ECB、固定 IV、明文比对）等同于未加密。"
+        keywords:
+          - "加密"
+          - "解密"
+          - "哈希"
+          - "摘要"
+          - "加盐"
+          - "salt"
+          - "md5"
+          - "sha1"
+          - "bcrypt"
+          - "argon2"
+          - "scrypt"
+          - "pbkdf2"
+          - "aes"
+          - "rsa"
+          - "hmac"
+          - "密码存储"
+          - "密码加密"
+        violation_signals:
+          - "密码使用 md5 / sha1 直接哈希"
+          - "加密使用固定 IV 或 ECB 模式"
+          - "验签用字符串相等而非恒定时间比较"
+          - "自定义「加密算法」"
+
+      - id: "high.payment"
+        label: "支付与资金"
+        rationale: "支付是最不能靠「本地能跑」验收的链路：mock 成功与真实到账在运行时无法区分。"
+        keywords:
+          - "支付"
+          - "付款"
+          - "下单"
+          - "回调"
+          - "网关"
+          - "微信支付"
+          - "支付宝"
+          - "stripe"
+          - "退款"
+          - "对账"
+          - "webhook"
+          - "notify"
+          - "payment"
+          - "金额"
+          - "资损"
+        violation_signals:
+          - "返回 mock / simulated 成功而不调用真实网关 SDK"
+          - "回调未验签"
+          - "回调未做幂等处理"
+          - "金额单位或精度处理不一致（分/元混用）"
+          - "测试开关默认在生产可开启"
+
+      - id: "high.audit"
+        label: "审计与留痕"
+        rationale: "审计缺失属于事后不可补救项：出问题时无法还原谁在何时做了什么。"
+        keywords:
+          - "审计"
+          - "留痕"
+          - "操作日志"
+          - "登录日志"
+          - "审计日志"
+          - "追溯"
+          - "audit"
+          - "auditlog"
+          - "操作记录"
+          - "谁在何时"
+        violation_signals:
+          - "登录 / 支付 / 审批成功路径无任何日志落库"
+          - "只在 console 打印，未持久化"
+          - "日志缺失关键字段（操作人、对象、结果）"
+          - "审计写入放在事务外，业务失败仍留痕或反之"
+
+      - id: "high.data_isolation"
+        label: "数据隔离"
+        rationale: "多租户 / 多机构场景下，缺少隔离条件会造成跨组织数据串号，属于事故级问题。"
+        keywords:
+          - "数据隔离"
+          - "多租户"
+          - "租户"
+          - "tenant"
+          - "机构隔离"
+          - "部门隔离"
+          - "数据权限"
+          - "越权访问"
+          - "行级权限"
+          - "row-level"
+          - "owner_id"
+          - "org_id"
+          - "脱敏"
+        violation_signals:
+          - "查询条件缺少 tenant_id / org_id 过滤"
+          - "详情接口按 id 直查，未校验归属"
+          - "导出接口绕过隔离条件"
+
+  # =========================== 中风险 ===========================
+  mid:
+    label: "中风险"
+    rationale: "会导致数据错误或重复操作，但通常可回滚、可人工修正。"
+    evidence_policy:
+      min_evidence_level: "E1"
+      require_three_tuple: false
+      forbid_bare_covered: true
+      require_enforcement_check: true
+      block_release_if_unverifiable: false
+    report_policy:
+      top_of_report: false
+      must_appear_in_detail_table: true
+    clause_types:
+
+      - id: "mid.state_machine"
+        label: "状态流转"
+        rationale: "状态缺分支会让业务走进死路：订单卡在中间态、无法撤回、无法过期。"
+        keywords:
+          - "状态流转"
+          - "状态机"
+          - "状态变更"
+          - "订单状态"
+          - "审批状态"
+          - "待审批"
+          - "已通过"
+          - "已驳回"
+          - "已撤回"
+          - "已过期"
+          - "status"
+          - "transition"
+          - "pending"
+          - "approved"
+          - "rejected"
+          - "withdrawn"
+          - "expired"
+        violation_signals:
+          - "状态枚举缺项（如缺 WITHDRAWN / EXPIRED）"
+          - "缺状态迁移校验，任意状态可跳到任意状态"
+          - "进入终态后仍可修改"
+          - "状态判断用字符串字面量散落各处，无单一来源"
+
+      - id: "mid.idempotency"
+        label: "幂等与防重"
+        rationale: "重复提交在重试、双击、网关重放时会稳定复现，直接造成重复扣款或重复建单。"
+        keywords:
+          - "幂等"
+          - "重复提交"
+          - "防重"
+          - "去重"
+          - "唯一键"
+          - "唯一约束"
+          - "idempotent"
+          - "idempotency"
+          - "duplicate"
+          - "request_id"
+          - "requestId"
+          - "重复支付"
+        violation_signals:
+          - "写接口无幂等键或唯一约束"
+          - "幂等键取了时间戳 / 随机数，失去防重意义"
+          - "先查后写且无事务或唯一索引兜底"
+          - "幂等记录与业务写入不在同一事务"
+
+      - id: "mid.rollback"
+        label: "异常回滚与事务"
+        rationale: "部分成功会造成数据不一致，且难以通过重放修复。"
+        keywords:
+          - "回滚"
+          - "事务"
+          - "补偿"
+          - "一致性"
+          - "原子性"
+          - "rollback"
+          - "transaction"
+          - "atomic"
+          - "补偿事务"
+          - "最终一致"
+        violation_signals:
+          - "多表写入无事务包裹"
+          - "抛异常后已写入的数据未清理"
+          - "跨服务调用无补偿逻辑"
+
+      - id: "mid.concurrency"
+        label: "并发控制"
+        rationale: "并发问题本地单线程复现不出来，却在线上稳定发生。"
+        keywords:
+          - "并发"
+          - "锁"
+          - "库存"
+          - "超卖"
+          - "race"
+          - "lock"
+          - "mutex"
+          - "乐观锁"
+          - "悲观锁"
+          - "cas"
+          - "version"
+        violation_signals:
+          - "读-改-写无锁或版本号校验"
+          - "分布式场景使用进程内锁"
+          - "库存扣减未做原子判断"
+
+      - id: "mid.timeout_retry"
+        label: "超时与重试"
+        rationale: "外部依赖不设超时会把故障放大为雪崩；盲目重试会放大重复副作用。"
+        keywords:
+          - "超时"
+          - "重试"
+          - "熔断"
+          - "退避"
+          - "timeout"
+          - "retry"
+          - "backoff"
+          - "circuit breaker"
+          - "限流"
+        violation_signals:
+          - "外部 HTTP 调用无超时设置"
+          - "无限重试或固定间隔高密度重试"
+          - "重试未考虑非幂等副作用"
+
+  # =========================== 低风险 ===========================
+  low:
+    label: "低风险"
+    rationale: "影响体验与观感，不影响正确性与安全性，可排期修复。"
+    evidence_policy:
+      min_evidence_level: "E1"
+      require_three_tuple: false
+      forbid_bare_covered: false       # 低风险允许简洁结论，但仍需证据定位
+      require_enforcement_check: false
+      block_release_if_unverifiable: false
+    report_policy:
+      top_of_report: false
+      must_appear_in_detail_table: true
+    clause_types:
+
+      - id: "low.ui_copy"
+        label: "UI 文案与国际化"
+        rationale: "文案问题不影响逻辑正确性，但硬编码文案会阻碍多语言发布。"
+        keywords:
+          - "文案"
+          - "提示语"
+          - "国际化"
+          - "多语言"
+          - "i18n"
+          - "locale"
+          - "翻译"
+          - "按钮文字"
+          - "tooltip"
+        violation_signals:
+          - "界面文案硬编码中文字符串"
+          - "缺 i18n key，直接渲染文本"
+
+      - id: "low.display_format"
+        label: "显示格式"
+        rationale: "格式问题影响可读性，不改变业务判定。"
+        keywords:
+          - "显示格式"
+          - "格式"
+          - "千分位"
+          - "小数"
+          - "货币"
+          - "日期格式"
+          - "时间格式"
+          - "format"
+          - "currency"
+        violation_signals:
+          - "金额未做最小单位转换或格式化"
+          - "日期直接输出 ISO 串"
+
+      - id: "low.sorting"
+        label: "排序与分页"
+        rationale: "排序规则影响可预期性，通常不影响正确性。"
+        keywords:
+          - "排序"
+          - "倒序"
+          - "正序"
+          - "分页"
+          - "sort"
+          - "order by"
+          - "page"
+          - "排序规则"
+        violation_signals:
+          - "未按需求字段排序"
+          - "排序字段缺失时结果不稳定"
+
+      - id: "low.empty_state"
+        label: "空状态与占位"
+        rationale: "空态缺失属于体验问题。"
+        keywords:
+          - "空状态"
+          - "空列表"
+          - "无数据"
+          - "占位"
+          - "骨架屏"
+          - "empty"
+          - "placeholder"
+          - "blank"
+        violation_signals:
+          - "接口为空时渲染空白页而不给提示"
+          - "加载态与空态未区分"
+
+# -----------------------------------------------------------------------------
+# 本地化实现标记（对应 SKILL.md 步骤 6 / 硬约束 H3）
+# -----------------------------------------------------------------------------
+local_implementation_scan:
+  # 仅在这些高风险类别中触发强制标记
+  applies_to_clause_types:
+    - "high.payment"
+    - "high.authentication"
+    - "high.secret_management"
+    - "high.cryptography"
+    - "high.authorization"
+    - "high.audit"
+  marker_label: "疑似本地实现，需人工确认"
+  trigger_tokens:
+    - "mock"
+    - "fake"
+    - "stub"
+    - "local"
+    - "hardcode"
+    - "dummy"
+    - "TODO"
+    - "FIXME"
+  trigger_patterns:
+    - id: "mock_success_return"
+      pattern: "return \\{?\\s*(success|ok|paid|mock)\\s*:\\s*true"
+      description: "副作用接口直接返回成功，不调用真实依赖"
+    - id: "always_allow"
+      pattern: "verify\\w*\\([^)]*\\)\\s*\\{\\s*return true"
+      description: "验签 / 鉴权函数恒返回 true"
+    - id: "commented_out_check"
+      pattern: "^\\s*//\\s*(verify|auth|check|validate)\\w*\\("
+      description: "校验逻辑被注释掉"
+    - id: "env_fallback_literal"
+      pattern: "process\\.env\\.[A-Z0-9_]+\\s*\\|\\|\\s*[\"'][^\"']+[\"']"
+      description: "环境变量缺失时回落到写死的字面量"
+    - id: "non_production_branch"
+      pattern: "NODE_ENV\\s*!==?\\s*[\"']production[\"']"
+      description: "非生产环境分支绕过真实实现"
+    - id: "in_process_only"
+      pattern: "new Map\\(\\).*(idempot|token|session)"
+      description: "幂等 / 令牌仅存于进程内，重启即失效"
+
+# -----------------------------------------------------------------------------
+# 报告生成策略（对应 SKILL.md 第 6 节）
+# -----------------------------------------------------------------------------
+report_policy:
+  section_order:
+    - overview
+    - high_risk_failed
+    - mid_risk
+    - low_risk
+    - must_detail_table
+    - manual_grading
+    - local_implementation_markers
+    - should_may_list
+    - scope_and_limits
+  overview_must_include:
+    - "需求总数与 MUST / SHOULD / MAY 数量"
+    - "符合 / 不符合 / 无法判定 / 待人工定级 计数"
+    - "高风险未通过数"
+    - "本次实际检索范围"
+    - "一句话结论（可否定稿）"
+  detail_table_min_columns:
+    - "编号"
+    - "风险等级（含命中规则 id）"
+    - "判定"
+    - "证据定位"
+    - "理由摘要"
+  forbidden_summary_phrases:
+    - "整体基本满足"
+    - "已覆盖"
+    - "看起来没问题"
+    - "建议后续补充"
+    - "本地运行正常"
+
+# -----------------------------------------------------------------------------
+# 自定义扩展（用户覆盖示例，取消注释即可生效）
+# -----------------------------------------------------------------------------
+# custom:
+#   # 追加到某个分级的条款类型
+#   - grade: "high"
+#     clause_type_id: "high.medical_compliance"
+#     label: "医疗合规"
+#     keywords: ["知情同意", "处方", "病历", "医保"]
+#     rationale: "行业监管要求，漏判代价高"
+#   # 把默认规则降级（谨慎使用，需在 PR 说明理由）
+#   - grade: "mid"
+#     move_from: "low.ui_copy"

@@ -1,0 +1,152 @@
+name: CI
+
+# 只做「格式正确 + 脚本能跑 + 物料自洽」的检查。
+# 本仓库不产出评估数字，CI 也不会生成、缓存或伪造任何指标（见 references/eval-protocol.md）。
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: 校验文档与评估物料
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 安装评估依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 编译检查
+        run: python -m py_compile scripts/run_eval.py
+
+      - name: 校验 YAML 与 Markdown 结构
+        run: |
+          python - <<'PY'
+          import pathlib
+          import sys
+
+          import yaml
+
+          # Windows 本地直接跑这段检查时，控制台默认 GBK 会把中文打乱
+          for _stream in (sys.stdout, sys.stderr):
+              try:
+                  _stream.reconfigure(encoding="utf-8", errors="replace")
+              except Exception:
+                  pass
+
+          errors = []
+
+
+          def need(cond, msg):
+              if not cond:
+                  errors.append(msg)
+
+
+          def read(rel):
+              return pathlib.Path(rel).read_text(encoding="utf-8")
+
+
+          # 1) YAML 必须可解析，且关键结构存在
+          for rel in ("risk-rules.yaml", "references/ground-truth.yaml"):
+              try:
+                  data = yaml.safe_load(read(rel))
+              except Exception as exc:
+                  errors.append(f"{rel} 无法解析：{exc}")
+                  continue
+              need(isinstance(data, dict) and data, f"{rel} 内容为空或不是映射")
+
+          rules = yaml.safe_load(read("risk-rules.yaml"))
+          grades = rules.get("grades") or {}
+          need(
+              {"high", "mid", "low"} <= set(grades),
+              "risk-rules.yaml 必须同时包含 high / mid / low 三级",
+          )
+          for key, grade in grades.items():
+              for clause in (grade or {}).get("clause_types") or []:
+                  need(bool(clause.get("id")), f"risk-rules.yaml 的 {key} 下有条款缺少 id")
+                  need(bool(clause.get("keywords")), f"risk-rules.yaml 的 {clause.get('id')} 缺少 keywords")
+
+          gt = yaml.safe_load(read("references/ground-truth.yaml"))
+          need(bool(gt.get("samples")), "ground-truth.yaml 没有 samples")
+          need(
+              gt.get("requires_human_confirmation") is True,
+              "ground-truth.yaml 必须声明 requires_human_confirmation: true（禁止 AI 自行确认）",
+          )
+          for sample in gt.get("samples") or []:
+              need(bool(sample.get("expected")), f"ground-truth 样本 {sample.get('id')} 缺少 expected")
+
+          # 2) 评估协议：关键内容在、代码围栏闭合
+          proto = read("references/eval-protocol.md")
+          for section in ("A 组", "B 组", "漏报率", "误报率", "无法判定率", "证据定位"):
+              need(section in proto, f"eval-protocol.md 缺少必要内容：{section}")
+          need(proto.count("```") % 2 == 0, "eval-protocol.md 代码围栏数量不成对")
+
+          # 3) 必备文件齐全（与 Prompt 约定的仓库结构一致）
+          required = [
+              "SKILL.md", "README.md", "risk-rules.yaml", "results.md",
+              "LICENSE", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md",
+              "CHANGELOG.md", "requirements.txt", ".editorconfig",
+              "references/requirement-template.md", "references/ground-truth.yaml",
+              "references/report-template.md", "references/eval-protocol.md",
+              "references/design-rationale.md",
+              "scripts/run_eval.py", "testset/requirements.md",
+              "testset/code/auth.ts", "testset/code/crypto.ts", "testset/code/order.ts",
+              "testset/code/payment.ts", "testset/code/permission.ts", "testset/code/ui.ts",
+              ".github/workflows/ci.yml",
+              ".github/PULL_REQUEST_TEMPLATE.md",
+              ".github/ISSUE_TEMPLATE/bug_report.md",
+              ".github/ISSUE_TEMPLATE/feature_request.md",
+              ".github/ISSUE_TEMPLATE/sample_proposal.md",
+          ]
+          for rel in required:
+              need(pathlib.Path(rel).is_file(), f"缺少必备文件：{rel}")
+
+          # 4) 评估产物不得入库（score.md / score.json / eval_output/ 属于每次运行的临时输出）
+          dirty = set()
+          for pattern in ("score.md", "score.json", "**/score.md", "**/score.json", "eval_output/**"):
+              dirty.update(str(p) for p in pathlib.Path(".").glob(pattern))
+          need(not dirty, f"不得提交评估产物：{sorted(dirty)}")
+
+          # 5) 防伪造：ground-truth 未人工确认时，results.md 必须保持「未执行」
+          if gt.get("status") != "human-confirmed":
+              need(
+                  "未执行" in read("results.md"),
+                  "ground-truth 仍是 draft：results.md 必须保持“未执行”，不得填入任何指标数字",
+              )
+
+          if errors:
+              print("结构校验失败：")
+              for item in errors:
+                  print(f" - {item}")
+              sys.exit(1)
+          print("结构校验通过：YAML 可解析、协议结构完整、必备文件齐全、无评估产物入库")
+          PY
+
+      - name: 评估物料自洽检查（不产生任何指标）
+        run: python scripts/run_eval.py --check
+
+      - name: 解析器自检
+        run: python scripts/run_eval.py --self-test
+
+      - name: 提示
+        run: |
+          echo "CI 只验证结构与可运行性；漏报率等指标需人工按 references/eval-protocol.md 跑 A/B 后由 --score 计算。"
