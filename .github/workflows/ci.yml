@@ -147,6 +147,13 @@ jobs:
       - name: 解析器自检
         run: python scripts/run_eval.py --self-test
 
+      - name: A/B 提示词抽取与校验（写临时目录，不入库）
+        run: |
+          python scripts/run_eval.py --prompts "$RUNNER_TEMP/prompts-smoke"
+          test -s "$RUNNER_TEMP/prompts-smoke/prompts/A.md"
+          test -s "$RUNNER_TEMP/prompts-smoke/prompts/B.md"
+          test -s "$RUNNER_TEMP/prompts-smoke/prompts/manifest.json"
+
       - name: 提示
         run: |
           echo "CI 只验证结构与可运行性；漏报率等指标需人工按 references/eval-protocol.md 跑 A/B 后由 --score 计算。"

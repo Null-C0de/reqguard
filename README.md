@@ -99,16 +99,18 @@ cd reqguard
 pip install -r requirements.txt
 python scripts/run_eval.py --check      # 1. 物料是否自洽（不出数字）
 python scripts/run_eval.py --self-test  # 2. 解析器自检（不出数字）
-python scripts/run_eval.py --score eval_output/2026-11-10T12-00  # 3. 计分
+python scripts/run_eval.py --prompts eval_output/2026-11-10T12-00  # 3. 把 A/B 提示词原文落盘
+python scripts/run_eval.py --score eval_output/2026-11-10T12-00    # 4. 计分
 ```
 
-脚本**不代替你调用模型**，它只做三件事：
+脚本**不代替你调用模型**，它只做四件事：
 
 1. `--check`：校验评估物料是否自洽（YAML 可解析、字段齐全、`risk_rule` 指向真实规则、`dataset_size` 与实际条数一致、**ground-truth 里的片段确实还存在于对应代码中**），不产生任何指标；
 2. `--self-test`：解析器自检（三态归一化、表格抽取、证据切分、指标计算），不需要真实数据；
-3. `--score eval_output/<时间戳>`：对**你自己按协议跑出来的** A1–A3 / B1–B3 报告计算逐条明细与指标，并写 `score.md` / `score.json`。
+3. `--prompts eval_output/<时间戳>`：把 `references/eval-protocol.md` 的 A/B 提示词**原文**写进 `<run>/prompts/{A,B}.md`，并记录 `sha256`；同时校验 A 组没有被弱化成一句话版、没有夹带 ReqGuard 的机制（两者都是协议 §2.1 明令禁止的）；
+4. `--score eval_output/<时间戳>`：对**你自己按协议跑出来的** A1–A3 / B1–B3 报告计算逐条明细与指标，并写 `score.md` / `score.json`。
 
-A/B 组的提示词以 `references/eval-protocol.md` 的原文为准，**脚本内不硬编码任何弱化版 A 组提示词**；没有报告数据时脚本会报错退出（`exit 2`），绝不输出一份全 0 的"成绩"。
+A/B 组的提示词以 `references/eval-protocol.md` 的原文为准，**脚本内不保留任何提示词副本**（副本就是弱化版的来源），只做抽取 + 校验；没有报告数据时脚本会报错退出（`exit 2`），绝不输出一份全 0 的"成绩"。
 
 评估协议（提示词原文、指标定义、统计口径、计分流程）见 [`references/eval-protocol.md`](references/eval-protocol.md)。
 

@@ -153,15 +153,16 @@ B 组提示词**只提供输入与入口**，不追加任何额外判定提示�
 ```text
 1. 冻结代码快照与需求文档（记录 commit / 文件哈希）
 2. 确认 ground-truth 状态为 human-confirmed；若为 draft，结果只能内部参考，不得对外引用
-3. A 组：全新 session × 3，只贴 A 提示词 + 需求文档 + 代码
-4. B 组：全新 session × 3，加载 SKILL.md 与 risk-rules.yaml，贴 B 提示词
-5. 脱敏：删除输出中的组别标识与 skill 痕迹
-6. 评分：按第 3、4 节逐条打分，写入 eval_output/<ts>/score.md
-7. 汇总：中位数入表，原始明细留档
-8. 更新 results.md（仅当 ≥20 条样本时才可作为对外数字）
+3. 落盘提示词：`python scripts/run_eval.py --prompts eval_output/<ts>`，得到 `prompts/A.md`、`prompts/B.md` 与含 sha256 的 `manifest.json`（逐字使用，不要手抄）
+4. A 组：全新 session × 3，只贴 A 提示词 + 需求文档 + 代码
+5. B 组：全新 session × 3，加载 SKILL.md 与 risk-rules.yaml，贴 B 提示词
+6. 脱敏：删除输出中的组别标识与 skill 痕迹
+7. 评分：按第 3、4 节逐条打分，写入 eval_output/<ts>/score.md
+8. 汇总：中位数入表，原始明细留档
+9. 更新 results.md（仅当 ≥20 条样本时才可作为对外数字）
 ```
 
-脚本化执行见 `scripts/run_eval.py`：它**不代跑模型**，只提供 `--check`（物料校验）、`--self-test`（解析器自检）、`--score <run_dir>`（对人工按本协议产出的 A/B 报告计分）。A/B 提示词以本文件原文为准，脚本不硬编码任何提示词变体，评分也不依赖提示词文本。
+脚本化执行见 `scripts/run_eval.py`：它**不代跑模型**，只提供 `--check`（物料校验）、`--self-test`（解析器自检）、`--prompts <run_dir>`（把本文件的 A/B 提示词原文落盘并记录 sha256，同时校验 A 组未被弱化）、`--score <run_dir>`（对人工按本协议产出的 A/B 报告计分）。A/B 提示词以本文件原文为准，脚本不保留任何提示词副本，评分也不依赖提示词文本。
 
 ---
 

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """ReqGuard 评估脚本：校验评估物料，并按 references/eval-protocol.md 计算指标。
 
-三种用法
+四种用法
 --------
 1) 只校验（CI 冒烟用，不产生任何评估数字）：
 
@@ -19,7 +19,15 @@
    用内置的极小样例字符串验证“三态归一化 / 表格行抽取 / 证据块切分”，
    只打印 PASS/FAIL，不输出任何指标。
 
-3) 正式评分（需要真实跑过 A/B 两组并留下报告）：
+3) 生成 A/B 提示词（提示词的唯一来源是 eval-protocol.md，脚本不内置任何副本）：
+
+       python scripts/run_eval.py --prompts eval_output/2026-11-10T12-00
+
+   把 §2.1 / §2.2 的提示词原文写进 <run>/prompts/{A,B}.md 并记录 sha256；
+   同时校验 A 组没有被弱化成一句话版、没有夹带 ReqGuard 的机制。
+   内置提示词副本就是“弱化版 A 组”的来源，因此这里只做抽取，绝不回退。
+
+4) 正式评分（需要真实跑过 A/B 两组并留下报告）：
 
        python scripts/run_eval.py --score eval_output/2026-11-10T12-00
 
@@ -48,6 +56,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import statistics
@@ -296,6 +305,145 @@ def check_materials(gt_path: Path, rules_path: Path, verbose: bool = True) -> li
         print(f"[OK] risk-rules：{len(rule_ids)} 条规则可分派风险等级")
         print(f"[OK] 一致性：dataset_size / composition / risk_rule 引用均已核对")
     return errors
+
+
+# ---------------------------------------------------------------------------
+# A/B 提示词（唯一来源是 references/eval-protocol.md，脚本不得硬编码变体）
+# ---------------------------------------------------------------------------
+
+PROTOCOL_PATH = REPO_ROOT / "references" / "eval-protocol.md"
+
+# 协议 §2.1 明文禁止把 ReqGuard 的机制塞进 A 组；出现这些词说明 A 组已被污染，
+# 其基线不再代表“正常人会写的体面提示词”，B 组的提升也就不可信了。
+A_PROMPT_FORBIDDEN = (
+    "risk-rules.yaml",
+    "文件::函数::片段",
+    "待人工定级",
+    "证据定位准确率",
+    "风险等级",
+)
+
+# “体面版”的最低要素：至少命中 3 项，否则判为被弱化（例如只剩一句“帮我看看”）。
+A_PROMPT_REQUIRED = ("逐条", "覆盖", "未满足", "无法判断", "汇总", "证据")
+
+
+def _rel(path: Path) -> str:
+    """manifest 里记仓库相对路径，避免把本机绝对路径带进评估产物。"""
+    try:
+        return path.resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return path.name
+
+
+def sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def extract_prompts(protocol_path: Path) -> tuple[dict, str]:
+    """从 eval-protocol.md 的 §2.1 / §2.2 各抽取第一个代码块。
+
+    返回 ({"A": 文本, "B": 文本}, 协议全文)。找不到章节或代码块一律抛错——
+    宁可失败，也不退回内置提示词，否则“弱化版 A 组”就悄悄生效了。
+    """
+    if not protocol_path.is_file():
+        raise FileNotFoundError(f"找不到评估协议：{protocol_path}")
+    protocol_text = protocol_path.read_text(encoding="utf-8", errors="replace")
+    prompts = {}
+    for key, section in (("A", "2.1"), ("B", "2.2")):
+        head = re.search(rf"^#{{1,4}}\s*{re.escape(section)}\b[^\n]*$", protocol_text, re.M)
+        if not head:
+            raise ValueError(f"eval-protocol.md 中找不到 §{section} 的标题")
+        fence = re.search(r"```(?:text)?[ \t]*\n(.*?)```", protocol_text[head.end():], re.S)
+        if not fence:
+            raise ValueError(f"eval-protocol.md §{section} 下找不到 ```text 代码块")
+        body = fence.group(1).strip()
+        if not body:
+            raise ValueError(f"eval-protocol.md §{section} 的提示词块为空")
+        prompts[key] = body + "\n"
+    return prompts, protocol_text
+
+
+def validate_prompts(prompts: dict) -> list:
+    """校验 A 组没被弱化、B 组确实指向 SKILL.md 与输入。返回错误列表。"""
+    errors = []
+    a, b = prompts["A"], prompts["B"]
+
+    if len(a) < 120:
+        errors.append(f"A 组提示词只有 {len(a)} 字符，疑似被弱化成一句话版")
+    hit = [w for w in A_PROMPT_REQUIRED if w in a]
+    if len(hit) < 3:
+        errors.append(
+            "A 组提示词缺少“体面版”要素：命中 {}/{} 项 {}".format(
+                len(hit), len(A_PROMPT_REQUIRED), list(A_PROMPT_REQUIRED)
+            )
+        )
+    leaked = [w for w in A_PROMPT_FORBIDDEN if w in a]
+    if leaked:
+        errors.append(f"A 组提示词夹带了 ReqGuard 的机制（协议 §2.1 明确禁止）：{leaked}")
+
+    if "SKILL.md" not in b:
+        errors.append("B 组提示词没有指明加载 SKILL.md")
+    if not any(w in b for w in ("requirements.md", "需求文档", "代码")):
+        errors.append("B 组提示词没有给出输入（需求文档 / 代码）")
+    return errors
+
+
+def run_prompts(run_dir: Path, protocol_path: Path, gt_path: Path) -> int:
+    """把协议里的 A/B 提示词原文落盘并记录哈希，供人工逐字使用。"""
+    try:
+        prompts, protocol_text = extract_prompts(protocol_path)
+    except (OSError, ValueError) as exc:
+        print(f"[FAIL] {exc}")
+        return 1
+
+    errors = validate_prompts(prompts)
+    if errors:
+        print(f"[FAIL] 提示词校验未通过（{len(errors)} 个问题）：")
+        for e in errors:
+            print("  - " + e)
+        return 1
+
+    prompt_dir = run_dir / "prompts"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    for key, name in (("A", "A.md"), ("B", "B.md")):
+        (prompt_dir / name).write_text(prompts[key], encoding="utf-8", newline="\n")
+
+    try:
+        gt_data, samples = load_ground_truth(gt_path)
+    except Exception as exc:  # 提示词与 ground-truth 是两件事，取不到就只记“未知”
+        gt_data, samples = {}, []
+        print(f"[WARN] 读取 ground-truth 失败（{exc}），manifest 不记录样本信息")
+
+    manifest = {
+        "protocol": _rel(protocol_path),
+        "protocol_sha256": sha256_text(protocol_text),
+        "prompts": {
+            "A": {
+                "file": "prompts/A.md",
+                "sha256": sha256_text(prompts["A"]),
+                "chars": len(prompts["A"]),
+            },
+            "B": {
+                "file": "prompts/B.md",
+                "sha256": sha256_text(prompts["B"]),
+                "chars": len(prompts["B"]),
+            },
+        },
+        "ground_truth": {
+            "status": str(gt_data.get("status", "")),
+            "dataset_size": len(samples),
+        },
+        "usage": "逐字使用 A.md / B.md；改提示词等于改评估基准，必须重跑全部结果。",
+    }
+    (prompt_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+    for key in ("A", "B"):
+        info = manifest["prompts"][key]
+        print(f"[OK] {key} 组提示词：{info['chars']} 字符 sha256={info['sha256'][:12]}")
+    print(f"[OK] 已写入 {prompt_dir}/{{A,B}}.md 与 manifest.json")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -786,11 +934,17 @@ def main(argv=None) -> int:
             "示例：\n"
             "  python scripts/run_eval.py --check\n"
             "  python scripts/run_eval.py --self-test\n"
+            "  python scripts/run_eval.py --prompts eval_output/2026-11-10T12-00\n"
             "  python scripts/run_eval.py --score eval_output/2026-11-10T12-00\n"
         ),
     )
     ap.add_argument("--check", action="store_true", help="只校验评估物料，不产生任何指标")
     ap.add_argument("--self-test", action="store_true", help="解析器自检，不依赖真实数据")
+    ap.add_argument(
+        "--prompts",
+        metavar="RUN_DIR",
+        help="把 eval-protocol.md 的 A/B 提示词原文落盘到 <RUN_DIR>/prompts/ 并记录哈希",
+    )
     ap.add_argument("--score", metavar="RUN_DIR", help="对一次 A/B 评估目录计算指标")
     ap.add_argument("--ground-truth", type=Path, default=default_gt, help="ground-truth.yaml 路径")
     ap.add_argument("--rules", type=Path, default=default_rules, help="risk-rules.yaml 路径")
@@ -803,6 +957,16 @@ def main(argv=None) -> int:
 
     if args.check:
         errors = check_materials(args.ground_truth, args.rules)
+        # A 组被弱化是评估里最隐蔽的作弊方式，所以 --check 也顺带校验提示词。
+        try:
+            prompts, _ = extract_prompts(PROTOCOL_PATH)
+            prompt_errors = validate_prompts(prompts)
+            if prompt_errors:
+                errors.extend(prompt_errors)
+            else:
+                print("[OK] A/B 提示词：已从 eval-protocol.md 抽取，A 组通过体面版校验")
+        except (OSError, ValueError) as exc:
+            errors.append(f"A/B 提示词抽取失败：{exc}")
         if errors:
             print("\n[FAIL] 发现 %d 个问题：" % len(errors))
             for e in errors:
@@ -810,6 +974,9 @@ def main(argv=None) -> int:
             return 1
         print("[PASS] 评估物料校验通过（未计算任何指标）")
         return 0
+
+    if args.prompts:
+        return run_prompts(Path(args.prompts), PROTOCOL_PATH, args.ground_truth)
 
     if args.score:
         run_dir = Path(args.score)

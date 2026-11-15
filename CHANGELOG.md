@@ -35,6 +35,7 @@
 - `scripts/run_eval.py`：仅依赖 Python 3 与 PyYAML。
   - `--check`：校验评估物料自洽（YAML 可解析、字段齐全、`risk_rule` 指向真实规则、`dataset_size`/`composition` 与实际一致、ground-truth 的 `snippet` 与 `match_tokens` 确实存在于对应代码），不输出任何指标；
   - `--self-test`：解析器自检（三态归一化、表格抽取、证据切分、指标计算）；
+  - `--prompts <run_dir>`：从 `references/eval-protocol.md` 原文抽取 A/B 提示词并落盘，记录协议与提示词的 `sha256`；同时校验 A 组未被弱化、未夹带 ReqGuard 的机制（脚本不保留任何提示词副本）；
   - `--score <run_dir>`：对 A1–A3 / B1–B3 报告计算逐条明细、五项指标与 A/B 差值，输出 `score.md` / `score.json`；缺失数据时以退出码 2 拒绝输出全 0「成绩」。
 - 指标只统计 MUST；多次运行取中位数；无对应样本时显式打印 `n/a` 并附脚注，避免把「没有样本」误读成 0。
 
