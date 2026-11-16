@@ -4,6 +4,25 @@
 
 一句话定位：**它不判断代码写得好不好，只判断需求到底满足了没有、证据在哪。**
 
+<p align="center">
+  <a href="https://github.com/Null-C0de/reqguard/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/Null-C0de/reqguard/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-blue.svg">
+  <img alt="Runtime dependencies: none" src="https://img.shields.io/badge/runtime%20dependencies-none-brightgreen.svg">
+</p>
+
+| 代码里的实际形态 | 本地跑起来 | ReqGuard 的结论 |
+| --- | --- | --- |
+| `const JWT_SECRET = "dev-secret-123456"` | 登录正常 | **不符合** — 密钥硬编码，未走配置 |
+| `requireAuth()` 实现完整，但订单路由只挂了日志中间件 | 接口能调通 | **不符合** — 鉴权未生效（定义 ≠ 注册 ≠ 生效） |
+| `createPayment()` 返回 `{ mock: true, tradeNo: "MOCK-…" }` | 支付成功 | **疑似本地实现，需人工确认** |
+| 回调直接改单，`verifyWebhookSignature()` 全仓无人调用 | 订单变「已支付」 | **不符合** — 不验签、不幂等 |
+| `canApprove()` 对 STAFF 兜底放行 | 审批按钮点得动 | **不符合** — 越权放行 |
+
+**不做的事**：不评价代码质量、不生成修复代码、不做安全扫描、不替人确认风险等级。
+**怎么判**：每条 MUST 必须落到 `文件 :: 函数 :: 片段` 三元证据；找不到证据只能写「无法判定」，不允许用「跑通了 / 测试过了」替代证据。
+**怎么用（30 秒）**：把 `SKILL.md` 加载给 agent，说明需求文档、代码位置与检查范围，按固定九节报告输出 → [快速开始](#3-快速开始)
+
 ## 1. 项目简介
 
 ReqGuard 解决的是交付流程里最常见的一类失效：**把「本地能跑」当成「规范已满足」**。
