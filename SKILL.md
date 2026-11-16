@@ -261,5 +261,5 @@ version: 0.1.0
 | `references/report-template.md` | 本报告结构的空白模板 |
 | `references/eval-protocol.md` | 评估协议（A/B 组提示词、评分口径） |
 | `references/design-rationale.md` | 设计原理（为什么这样约束） |
-| `references/ground-truth.yaml` | 评估用预期判定（草案，仅评估用） |
+| `references/ground-truth.yaml` | 评估用预期判定（仅评估用，状态见文件内 `status`） |
 | `scripts/run_eval.py` | 评估脚本（仅评估用） |

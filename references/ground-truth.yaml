@@ -1,14 +1,15 @@
 # =============================================================================
 # ReqGuard 评估用 ground-truth（预期判定）
 # -----------------------------------------------------------------------------
-# ！本文件为草案，需人工确认后作为评估基准；仅用于评估 skill，不用于日常使用。
+# ！本文件已于 2026-11-17 经人工确认，作为评估基准；仅用于评估 skill，不用于日常使用。
 # ！禁止由 AI 自行确认 ground-truth。
 # ！建议人工确认后隔天复核，或由他人独立标注部分样本做对照。
 #
 # 用途：只有「评估 ReqGuard 本身的漏报率」才需要本文件。
 #       日常用自己的需求文档 + 自己的代码检查时，不需要写 ground-truth。
 #
-# 当前状态：DRAFT — 未经人工确认，不得作为对外数字的评分依据。
+# 当前状态：HUMAN-CONFIRMED（2026-11-17）— 可作评估基准；
+#           对外引用仍受样本规模约束，必须来自 ≥20 条测试集。
 # 规模说明：10 条为起步规模，统计意义有限；正式评估建议扩展到 20～30 条。
 #           对外引用数字必须来自 ≥20 条测试集。
 # 已知覆盖缺口：本版是「9 条埋坑 MUST + 1 条合规 MAY」的结构，
@@ -18,10 +19,10 @@
 
 version: 1
 schema: "reqguard.ground-truth"
-status: "draft"                      # draft | human-confirmed
+status: "human-confirmed"             # draft | human-confirmed
 requires_human_confirmation: true
-confirmed_by: null                   # 人工确认后填写姓名与日期，AI 不得填写
-confirmed_at: null
+confirmed_by: "Null-C0de"             # 人工确认人（AI 不得填写）
+confirmed_at: "2026-11-17"
 dataset_size: 10
 created: "2026-11-10"
 

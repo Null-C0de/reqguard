@@ -4,7 +4,15 @@
 
 ## [Unreleased]
 
-暂无。
+### 变更
+
+- `references/ground-truth.yaml`：10 条样本已于 2026-11-17 由人工逐条确认，`status` 由 `draft` 改为 `human-confirmed`，并记录 `confirmed_by` / `confirmed_at`。**评估本身仍未执行**，`results.md` 保持「未执行」。
+- CI：`actions/checkout`（v4.4.0）与 `actions/setup-python`（v5.6.0）固定到 commit SHA，消除 tag 被移动带来的供应链风险。
+- 仓库：`main` 启用分支保护（必须通过 `CI / validate` 检查、必须经 PR 合并、禁止强推与删除）。
+
+### 说明
+
+- ground-truth 确认不等于评估完成。对外引用漏报率仍要求样本数 ≥20 且 A/B 两组真实运行，见 `results.md` 第 1 节。
 
 ## [0.1.0] - 2026-11-10
 

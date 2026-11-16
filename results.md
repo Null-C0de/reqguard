@@ -11,9 +11,10 @@
 | 项 | 值 |
 | --- | --- |
 | 评估状态 | **未执行** |
-| 原因 | ① `testset/` 仍是占位文件，尚未生成 10 条测试样本；② `references/ground-truth.yaml` 为 `draft`，需人工确认 |
-| 下一步 | 填充 testset → 人工确认 ground-truth → 按 `references/eval-protocol.md` 第 5 节跑 A/B → 用 `scripts/run_eval.py --score` 生成汇总 → 回填本文件 |
-| 对外可用 | **否**（样本数 < 20，且 ground-truth 未确认） |
+| ground-truth 状态 | **已人工确认**（2026-11-17，`human-confirmed`） |
+| 原因 | `testset/` 10 条样本与 ground-truth 已就绪，但 A/B 两组评估尚未实际运行——没有运行就没有数字，因此本文件不填任何指标 |
+| 下一步 | 按 `references/eval-protocol.md` 第 5 节跑 A/B（各 3 次）→ `scripts/run_eval.py --score eval_output/<timestamp>` → 回填第 2、3 节 |
+| 对外可用 | **否**（样本数 10 < 20，即使跑出数字也不得对外引用） |
 
 ---
 
